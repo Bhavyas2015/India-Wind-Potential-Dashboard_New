@@ -374,3 +374,86 @@ def list_endpoints():
             'GET  /api/lulc?lat=&lon=',
         ]
     }
+# Date-specific wind data endpoint
+@app.get('/api/wind/daterange')
+async def wind_date_range(
+    lat:       float,
+    lon:       float,
+    date_from: str = '',
+    date_to:   str = ''
+):
+    """
+    Fetch hourly wind data for a specific date range.
+    date_from, date_to: YYYY-MM-DD format
+    Works for historical dates and future forecast.
+    """
+    try:
+        from app.services.era5_client import fetch_date_range
+        from datetime import datetime, timedelta
+
+        # Default to last 2 days if no dates provided
+        if not date_from or not date_to:
+            today = datetime.utcnow().date()
+            date_to   = str(today)
+            date_from = str(today - timedelta(days=1))
+
+        # Validate date format
+        try:
+            datetime.strptime(date_from, '%Y-%m-%d')
+            datetime.strptime(date_to,   '%Y-%m-%d')
+        except ValueError:
+            raise HTTPException(400, 'Invalid date format. Use YYYY-MM-DD')
+
+        # Max 30 days per request
+        d1 = datetime.strptime(date_from, '%Y-%m-%d')
+        d2 = datetime.strptime(date_to,   '%Y-%m-%d')
+        if (d2 - d1).days > 30:
+            raise HTTPException(400, 'Max date range is 30 days')
+        if d2 < d1:
+            raise HTTPException(400, 'date_to must be >= date_from')
+
+        return await fetch_date_range(lat, lon, date_from, date_to)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# Date range grid analysis
+@app.post('/api/wind/daterange/grid')
+async def wind_date_range_grid(payload: dict):
+    """
+    Fetch date range wind data for multiple grid points.
+    Useful for short-term wind resource assessment.
+    """
+    try:
+        from app.services.era5_client import fetch_date_range_batch
+        from datetime import datetime
+
+        points    = payload.get('points', [])
+        date_from = payload.get('date_from', '')
+        date_to   = payload.get('date_to',   '')
+
+        if not points:
+            raise HTTPException(400, 'No points provided')
+        if not date_from or not date_to:
+            raise HTTPException(400, 'date_from and date_to required')
+
+        pts = [(p['lat'], p['lon']) for p in points]
+        results = await fetch_date_range_batch(pts, date_from, date_to)
+
+        return {
+            'date_from': date_from,
+            'date_to':   date_to,
+            'n_points':  len(pts),
+            'results': [
+                results.get((p['lat'], p['lon']), {})
+                for p in points
+            ]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, str(e))
