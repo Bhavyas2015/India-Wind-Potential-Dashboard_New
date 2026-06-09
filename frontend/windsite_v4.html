@@ -359,28 +359,60 @@ canvas.chart{max-height:140px}
     <input type="range" id="alpha" min="5" max="40" value="14" step="1" oninput="updAlpha()">
   </div>
 
-  <div class="sec-title">MCDA Weights</div>
+  <div class="sec-title">AHP-MCDA Criteria Weights</div>
   <div class="section">
-    <div class="weight-row"><label>Wind</label><input type="range" id="w_wind" min="0" max="100" value="35" oninput="updWeights()"><span id="wv_wind">35</span></div>
-    <div class="weight-row"><label>Terrain</label><input type="range" id="w_ter" min="0" max="100" value="20" oninput="updWeights()"><span id="wv_ter">20</span></div>
-    <div class="weight-row"><label>Land Use</label><input type="range" id="w_land" min="0" max="100" value="20" oninput="updWeights()"><span id="wv_land">20</span></div>
-    <div class="weight-row"><label>Grid Access</label><input type="range" id="w_acc" min="0" max="100" value="15" oninput="updWeights()"><span id="wv_acc">15</span></div>
-    <div class="weight-row"><label>Finance</label><input type="range" id="w_fin" min="0" max="100" value="10" oninput="updWeights()"><span id="wv_fin">10</span></div>
+    <div style="font-size:10px;color:var(--text3);margin-bottom:10px;padding:8px;background:var(--bg2);border-radius:6px;border-left:2px solid var(--blue)">
+      Adjust relative importance of each criterion.<br>
+      Method: Analytic Hierarchy Process (Saaty 1980).
+    </div>
+    <div class="weight-row">
+      <label style="line-height:1.3">Wind Resource<br><span style="font-size:9px;color:var(--text3)">WPD - Weibull - NASA POWER</span></label>
+      <input type="range" id="w_wind" min="0" max="100" value="35" oninput="updWeights()">
+      <span id="wv_wind" style="font-family:var(--font-mono);color:var(--cyan)">35</span>
+    </div>
+    <div class="weight-row">
+      <label style="line-height:1.3">Terrain Quality<br><span style="font-size:9px;color:var(--text3)">Slope - SRTM 90m DEM</span></label>
+      <input type="range" id="w_ter" min="0" max="100" value="20" oninput="updWeights()">
+      <span id="wv_ter" style="font-family:var(--font-mono);color:var(--cyan)">20</span>
+    </div>
+    <div class="weight-row">
+      <label style="line-height:1.3">Land Suitability<br><span style="font-size:9px;color:var(--text3)">ESA WorldCover 10m LULC</span></label>
+      <input type="range" id="w_land" min="0" max="100" value="20" oninput="updWeights()">
+      <span id="wv_land" style="font-family:var(--font-mono);color:var(--cyan)">20</span>
+    </div>
+    <div class="weight-row">
+      <label style="line-height:1.3">Grid Proximity<br><span style="font-size:9px;color:var(--text3)">220kV / 400kV / 765kV lines</span></label>
+      <input type="range" id="w_acc" min="0" max="100" value="15" oninput="updWeights()">
+      <span id="wv_acc" style="font-family:var(--font-mono);color:var(--cyan)">15</span>
+    </div>
+    <div class="weight-row">
+      <label style="line-height:1.3">Financial Viability<br><span style="font-size:9px;color:var(--text3)">LCOE - IRR - NPV (INR)</span></label>
+      <input type="range" id="w_fin" min="0" max="100" value="10" oninput="updWeights()">
+      <span id="wv_fin" style="font-family:var(--font-mono);color:var(--cyan)">10</span>
+    </div>
   </div>
 
-  <div class="sec-title">Constraints</div>
+  <div class="sec-title">Site Exclusion Constraints</div>
   <div class="section">
-    <div class="field-label">Max slope <span class="field-val" id="slopev">15 deg</span></div>
+    <div style="font-size:10px;color:var(--text3);margin-bottom:10px;padding:8px;background:var(--bg2);border-radius:6px;border-left:2px solid var(--red)">
+      Hard exclusions per IEC 61400-1 Ed.3 and MNRE guidelines.
+    </div>
+    <div class="field-label">Max terrain slope <span class="field-val" id="slopev">15 deg</span></div>
     <input type="range" id="slope_sl" min="5" max="30" value="15" step="1" oninput="updSlope()">
-    <div class="field-label">Min wind speed <span class="field-val" id="minwsv">4.0 m/s</span></div>
+    <div style="font-size:9px;color:var(--text3);margin-top:-6px;margin-bottom:8px">IEC limit: 15 deg for standard turbines</div>
+    <div class="field-label">Min viable wind speed <span class="field-val" id="minwsv">4.0 m/s</span></div>
     <input type="range" id="minws" min="20" max="80" value="40" step="5" oninput="updMinWS()">
+    <div style="font-size:9px;color:var(--text3);margin-top:-6px;margin-bottom:8px">Cut-in threshold (IEC-S class sites)</div>
     <div class="field-label">Settlement buffer <span class="field-val" id="bufv">500 m</span></div>
     <input type="range" id="buf" min="0" max="2000" value="500" step="100" oninput="updBuf()">
+    <div style="font-size:9px;color:var(--text3);margin-top:-6px;margin-bottom:8px">MNRE minimum: 500m from habitation</div>
     <div class="field-label">Max grid distance <span class="field-val" id="gdv">30 km</span></div>
     <input type="range" id="gd_sl" min="5" max="100" value="30" step="5" oninput="updGD()">
-    <div class="chk-row"><input type="checkbox" id="exF" checked><label for="exF">Exclude forest</label></div>
-    <div class="chk-row"><input type="checkbox" id="exW" checked><label for="exW">Exclude water</label></div>
-    <div class="chk-row"><input type="checkbox" id="exP" checked><label for="exP">Exclude protected areas</label></div>
+    <div style="font-size:9px;color:var(--text3);margin-top:-6px;margin-bottom:8px">Transmission cost viability threshold</div>
+    <div style="margin-top:8px;font-size:10px;color:var(--text3);margin-bottom:6px;font-weight:600">Regulatory Hard Exclusions</div>
+    <div class="chk-row"><input type="checkbox" id="exF" checked><label for="exF">Forest (Forest Conservation Act 1980)</label></div>
+    <div class="chk-row"><input type="checkbox" id="exW" checked><label for="exW">Water bodies</label></div>
+    <div class="chk-row"><input type="checkbox" id="exP" checked><label for="exP">Protected areas (Wildlife Act 1972)</label></div>
   </div>
 
   <button id="run-btn" onclick="runAnalysis()">RUN ANALYSIS</button>
