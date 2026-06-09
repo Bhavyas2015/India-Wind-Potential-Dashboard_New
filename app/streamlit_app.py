@@ -59,8 +59,7 @@ def start_fastapi():
 with st.spinner("Starting WindSite backend..."):
     start_fastapi()
 
-st.components.v1.iframe(
+st.iframe(
     src=API_BASE + "/dashboard",
-    height=960,
-    scrolling=False
+    height=960
 )
