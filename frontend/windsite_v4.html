@@ -562,7 +562,14 @@ canvas.chart{max-height:140px}
 </div>
 
 <script>
-const API = (window.WINDSITE_API_BASE && window.WINDSITE_API_BASE !== 'http://localhost:8000') ? window.WINDSITE_API_BASE : (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '');
+const API = window.location.hostname === 'localhost' ? 'http://localhost:8000' : '';
+const _origFetch = window.fetch;
+window.fetch = function(url, opts) {
+  if (typeof url === 'string' && url.startsWith('http://localhost:8000')) {
+    url = url.replace('http://localhost:8000', '');
+  }
+  return _origFetch(url, opts);
+};
 const GS_MAP = [0.25,0.5,0.75,1.0];
 const LULC_COLORS = {open:'#78c83a',agricultural:'#a3c96e',shrubland:'#c8a93e',
   forest:'#2d6a4f',urban:'#ef4444',water:'#3b82f6',wetland:'#6b7280',
