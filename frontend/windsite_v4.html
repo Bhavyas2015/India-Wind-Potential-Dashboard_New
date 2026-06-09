@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>WindSite v4 - India Wind Energy Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+// ================================================================
+// REAL WIND ANIMATION - GFS NWP Data (same source as Windy.com)
+// Fetches actual wind vectors from /api/wind/live
+// Updates every 60 minutes (GFS refresh cycle)
+// ================================================================
+
+let _realWindLoaded = false;
+let _windRefreshTimer = null;
+
+async function loadRealWindField(aoi) {
+    try {
+        document.getElementById('pts-badge').textContent = 'Loading GFS wind field...';
+        const r = await fetch(API + '/api/wind/live?aoi=' + (aoi||'gujarat') + '&levels=10,80');
+        if (!r.ok) throw new Error('GFS API ' + r.status);
+        const data = await r.json();
+        const grid = data.grid || [];
+        if (!grid.length) throw new Error('No wind field data');
+
+        // Build interpolatable wind field at 10m and 80m
+        _wf = grid.map(pt => {
+            const ws = pt.ws80m || pt.ws10m || 5;
+            const wd = pt.wd80m || pt.wd10m || 225;
+            const rad = wd * Math.PI / 180;
+            return {
+                lat: pt.lat, lon: pt.lon,
+                u:   -ws * Math.sin(rad),
+                v:   -ws * Math.cos(rad),
+                spd: ws,
+                ws10: pt.ws10m || 5,
+                ws80: pt.ws80m || 7,
+                wd:   wd,
+            };
+        });
+
+        _realWindLoaded = true;
+        const now = new Date();
+        const timeStr = now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0') + ' UTC';
+        document.getElementById('pts-badge').textContent =
+            grid.length + ' GFS pts | ' + data.model + ' | ' + timeStr;
+
+        console.log('Real GFS wind field loaded: ' + grid.length + ' points');
+        console.log('Model: ' + data.model + ' | Source: ' + data.source);
+
+        // Auto-start wind animation with real data
+        if (!S.windOn) startWind();
+
+        // Schedule refresh every 60 min
+        if (_windRefreshTimer) clearTimeout(_windRefreshTimer);
+        _windRefreshTimer = setTimeout(() => loadRealWindField(aoi), 60 * 60 * 1000);
+
+        return data;
+    } catch(e) {
+        console.warn('GFS wind field failed, using analysis data:', e.message);
+        document.getElementById('pts-badge').textContent = 'Using analysis wind data';
+        _realWindLoaded = false;
+    }
+}
+
+// Load real wind field immediately on page load
+window.addEventListener('load', function() {
+    setTimeout(() => {
+        const aoi = document.getElementById('aoi').value || 'gujarat';
+        loadRealWindField(aoi);
+    }, 2000);
+});
+
+// Reload when AOI changes
+const _origAOIChange = window.onAOIChange;
+document.getElementById('aoi').addEventListener('change', function() {
+    loadRealWindField(this.value);
+});
+
+// Wind timeseries popup on cell click
+async function loadWindTimeseries(lat, lon) {
+    try {
+        const r = await fetch(API + '/api/wind/timeseries?lat=' + lat + '&lon=' + lon + '&hours=48');
+        if (!r.ok) return;
+        const ts = await r.json();
+
+        // Update chart with real forecast
+        if (S.step === 2 && ts.ws80 && ts.ws80.length > 0) {
+            const ctx = document.getElementById('main-chart').getContext('2d');
+            if (chartInst) { chartInst.destroy(); chartInst = null; }
+            const hours = ts.times ? ts.times.slice(0,24).map(t => t.split('T')[1]||t) : Array.from({length:24},(_,i)=>i+'h');
+            chartInst = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: hours,
+                    datasets: [
+                        {label: '80m hub', data: ts.ws80.slice(0,24), borderColor: '#00d084',
+                         borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3},
+                        {label: '10m',     data: ts.ws10.slice(0,24), borderColor: '#1a8cff',
+                         borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3, borderDash: [4,4]},
+                        {label: 'Gusts',   data: (ts.gusts||[]).slice(0,24), borderColor: '#ff3d57',
+                         borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3, borderDash: [2,4]},
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: true, labels: { color: '#8fa8c0', font: { size: 9 } } } },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 8, color: '#4a6278', font: { size: 9 } }, grid: { color: '#1e2d3d' } },
+                        y: { ticks: { color: '#4a6278', font: { size: 9 } }, grid: { color: '#1e2d3d' },
+                             title: { display: true, text: 'm/s', color: '#4a6278', font: { size: 9 } } }
+                    }
+                }
+            });
+
+            // Update chart header
+            const hd = document.querySelector('.chart-hd');
+            if (hd) hd.textContent = '48hr GFS Forecast | ' + ts.model;
+        }
+    } catch(e) {
+        console.warn('Wind timeseries failed:', e.message);
+    }
+}
+
+// Enhance selectPoint to also load timeseries
+const _origSelectPoint = selectPoint;
+selectPoint = function(pt) {
+    _origSelectPoint(pt);
+    // Load 48hr GFS forecast for this location
+    loadWindTimeseries(pt.lat, pt.lon);
+};
+
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+<style>
+:root {
+  --bg0:#060810; --bg1:#0d1117; --bg2:#161b25; --bg3:#1e2535;
+  --border:#252d3d; --border2:#2e3850;
+  --text:#e2e8f0; --text2:#94a3b8; --text3:#64748b;
+  --blue:#3b82f6; --cyan:#06b6d4; --green:#10b981; --yellow:#f59e0b;
+  --orange:#f97316; --red:#ef4444; --purple:#8b5cf6;
+  --high:#00c853; --mod:#76d275; --low:#f59e0b; --excl:#ef4444;
+  --font-mono:'Space Mono',monospace; --font-sans:'DM Sans',sans-serif;
+  --sidebar:280px; --rightpanel:300px; --topbar:48px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg0);color:var(--text);font-family:var(--font-sans);
+     display:grid;grid-template-rows:var(--topbar) 1fr;
+     grid-template-columns:var(--sidebar) 1fr var(--rightpanel);
+     height:100vh;overflow:hidden}
+
+/* TOPBAR */
+#topbar{grid-column:1/-1;background:var(--bg1);border-bottom:1px solid var(--border);
+        display:flex;align-items:center;padding:0 16px;gap:16px;z-index:1000}
+#logo{font-family:var(--font-mono);font-size:15px;font-weight:700;color:var(--cyan);
+      letter-spacing:2px;display:flex;align-items:center;gap:8px}
+#logo span{color:var(--text3);font-size:11px;font-weight:400;letter-spacing:1px}
+#view-tabs{display:flex;gap:4px;margin-left:auto}
+.vtab{padding:5px 14px;border-radius:6px;border:1px solid var(--border2);
+      background:transparent;color:var(--text2);font-size:12px;cursor:pointer;
+      font-family:var(--font-sans);transition:all .15s}
+.vtab:hover{background:var(--bg3);color:var(--text)}
+.vtab.active{background:var(--blue);border-color:var(--blue);color:#fff}
+#status-badge{margin-left:8px;padding:3px 10px;border-radius:12px;font-size:10px;
+              font-family:var(--font-mono);letter-spacing:1px}
+.st-idle{background:rgba(100,116,139,.2);color:var(--text3);border:1px solid var(--border)}
+.st-busy{background:rgba(59,130,246,.2);color:var(--blue);border:1px solid var(--blue);animation:pulse 1.2s infinite}
+.st-ok{background:rgba(16,185,129,.2);color:var(--green);border:1px solid var(--green)}
+.st-err{background:rgba(239,68,68,.2);color:var(--red);border:1px solid var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* SIDEBAR */
+#sidebar{background:var(--bg1);border-right:1px solid var(--border);
+         overflow-y:auto;padding:12px 0;z-index:100;scrollbar-width:thin;
+         scrollbar-color:var(--border) transparent}
+.section{padding:0 14px 14px}
+.sec-title{font-size:9px;font-weight:600;color:var(--text3);letter-spacing:2px;
+           text-transform:uppercase;padding:10px 14px 6px;display:flex;align-items:center;gap:6px}
+.sec-title::after{content:'';flex:1;height:1px;background:var(--border)}
+.field-label{font-size:11px;color:var(--text2);margin-bottom:5px;display:flex;
+             justify-content:space-between;align-items:center}
+.field-val{font-family:var(--font-mono);font-size:11px;color:var(--cyan)}
+select,input[type=range]{width:100%;background:var(--bg2);color:var(--text);
+  border:1px solid var(--border2);border-radius:6px;padding:7px 10px;
+  font-size:12px;font-family:var(--font-sans);outline:none;cursor:pointer;margin-bottom:8px}
+select:hover,select:focus{border-color:var(--blue)}
+input[type=range]{padding:4px 0;accent-color:var(--blue);background:transparent;border:none}
+.tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;
+     font-family:var(--font-mono);margin-bottom:4px}
+.tag-blue{background:rgba(59,130,246,.15);color:var(--blue);border:1px solid rgba(59,130,246,.3)}
+.tag-green{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.weight-row{display:grid;grid-template-columns:80px 1fr 36px;align-items:center;gap:8px;margin-bottom:6px}
+.weight-row label{font-size:11px;color:var(--text2)}
+.weight-row span{font-family:var(--font-mono);font-size:11px;color:var(--cyan);text-align:right}
+.chk-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer}
+.chk-row input{width:auto;accent-color:var(--blue)}
+.chk-row label{font-size:12px;color:var(--text2);cursor:pointer}
+#run-btn{width:calc(100% - 28px);margin:8px 14px;padding:11px;border-radius:8px;
+         border:none;background:var(--blue);color:#fff;font-size:13px;font-weight:600;
+         cursor:pointer;font-family:var(--font-sans);letter-spacing:.5px;transition:all .15s}
+#run-btn:hover{background:#2563eb;transform:translateY(-1px)}
+#run-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.data-source-badge{font-size:9px;font-family:var(--font-mono);padding:2px 7px;border-radius:4px;
+                   background:rgba(6,182,212,.1);color:var(--cyan);border:1px solid rgba(6,182,212,.2)}
+
+/* MAP */
+#map-container{position:relative;overflow:hidden;background:var(--bg0)}
+#map{width:100%;height:100%}
+#wind-canvas{position:absolute;top:0;left:0;width:100%;height:100%;
+             pointer-events:none;z-index:400}
+#map-overlay{position:absolute;top:10px;left:10px;z-index:500;display:flex;flex-direction:column;gap:8px}
+.map-btn{background:rgba(13,17,23,.9);border:1px solid var(--border2);color:var(--text);
+         padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;
+         font-family:var(--font-sans);backdrop-filter:blur(8px);transition:all .15s}
+.map-btn:hover{background:var(--bg3);border-color:var(--blue)}
+.map-btn.active{background:rgba(59,130,246,.2);border-color:var(--blue);color:var(--blue)}
+#loader{position:absolute;inset:0;background:rgba(6,8,16,.85);display:none;
+        flex-direction:column;align-items:center;justify-content:center;z-index:2000;
+        backdrop-filter:blur(4px)}
+#loader-msg{font-family:var(--font-mono);font-size:13px;color:var(--cyan);margin-bottom:16px}
+#loader-sub{font-size:11px;color:var(--text3);margin-bottom:20px}
+#loader-bar-wrap{width:240px;height:3px;background:var(--border);border-radius:2px}
+#loader-bar{height:100%;background:var(--blue);border-radius:2px;width:0%;transition:width .4s}
+#wind-legend{position:absolute;bottom:36px;left:8px;z-index:500;
+             background:rgba(13,17,23,.88);border:1px solid var(--border2);
+             border-radius:8px;padding:10px 12px;font-family:var(--font-mono);
+             font-size:10px;color:var(--text2);backdrop-filter:blur(8px)}
+#wind-legend .leg-title{font-size:9px;color:var(--text3);letter-spacing:1px;margin-bottom:6px}
+.leg-item{display:flex;align-items:center;gap:8px;margin:3px 0}
+.leg-swatch{width:28px;height:3px;border-radius:2px}
+#nasa-badge{position:absolute;top:10px;right:10px;z-index:500;font-family:var(--font-mono);
+            font-size:10px;color:var(--text2);background:rgba(13,17,23,.88);
+            border:1px solid var(--border2);padding:5px 10px;border-radius:6px;backdrop-filter:blur(8px)}
+
+/* RIGHT PANEL */
+#right{background:var(--bg1);border-left:1px solid var(--border);
+       overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.rpanel{padding:0 0 16px}
+.rp-header{padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--border);
+           font-size:9px;font-weight:600;color:var(--text3);letter-spacing:2px;text-transform:uppercase}
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
+.metric-cell{background:var(--bg1);padding:10px 12px}
+.metric-val{font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--text);line-height:1}
+.metric-unit{font-size:9px;color:var(--text3);margin-top:2px;font-family:var(--font-mono)}
+.metric-lbl{font-size:10px;color:var(--text2);margin-top:4px}
+.metric-sub{font-size:9px;color:var(--text3);margin-top:2px}
+.chart-wrap{padding:12px 14px}
+.chart-title{font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;
+             margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.chart-tabs{display:flex;gap:4px}
+.ct{padding:2px 8px;border-radius:4px;font-size:9px;cursor:pointer;border:1px solid var(--border2);
+    color:var(--text3);background:transparent;transition:all .1s}
+.ct.active{background:var(--bg3);color:var(--text);border-color:var(--border2)}
+canvas.chart{max-height:140px}
+.fin-table{width:100%;border-collapse:collapse;font-size:11px}
+.fin-table td{padding:5px 12px;border-bottom:1px solid var(--border)}
+.fin-table td:first-child{color:var(--text3)}
+.fin-table td:last-child{font-family:var(--font-mono);color:var(--text);text-align:right}
+.suit-bar-wrap{padding:10px 14px}
+.suit-label{font-size:11px;display:flex;justify-content:space-between;margin-bottom:4px}
+.suit-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden}
+.suit-fill{height:100%;border-radius:3px;transition:width .4s}
+.comp-row{display:flex;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border);gap:8px}
+.comp-row:hover{background:var(--bg2)}
+.comp-label{font-size:11px;color:var(--text2);flex:1}
+.comp-bar-wrap{flex:2;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.comp-bar{height:100%;border-radius:2px;background:var(--blue)}
+.comp-val{font-family:var(--font-mono);font-size:10px;color:var(--cyan);width:60px;text-align:right}
+
+/* 3D VIEW */
+#view-3d{display:none;position:relative;background:var(--bg0)}
+#canvas-3d{width:100%;height:100%;display:block}
+#view-3d-info{position:absolute;top:10px;left:10px;z-index:100;
+              background:rgba(13,17,23,.88);border:1px solid var(--border2);
+              border-radius:8px;padding:10px 14px;font-size:11px;color:var(--text2)}
+
+/* SUMMARY BAR */
+#summary{position:absolute;bottom:0;left:0;right:0;height:32px;z-index:500;
+         background:rgba(13,17,23,.92);border-top:1px solid var(--border);
+         display:flex;align-items:center;padding:0 14px;gap:20px;
+         font-family:var(--font-mono);font-size:10px;color:var(--text3);backdrop-filter:blur(8px)}
+.sval{color:var(--text);margin-left:4px}
+.sdot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div id="topbar">
+  <div id="logo">WINDSITE <span>v4 INDIA</span></div>
+  <div style="font-size:10px;color:var(--text3);font-family:var(--font-mono)">
+    NASA POWER &middot; ESA WorldCover 10m &middot; SRTM 90m &middot; IEC 61400-1
+  </div>
+  <div id="view-tabs">
+    <button class="vtab active" onclick="setView('map')">Map</button>
+    <button class="vtab" onclick="setView('3d')">3D Terrain</button>
+    <button class="vtab" onclick="setView('compare')">Compare</button>
+  </div>
+  <div id="status-badge" class="st-idle">IDLE</div>
+  <button style="margin-left:8px;padding:5px 12px;border-radius:6px;border:1px solid var(--border2);
+                 background:transparent;color:var(--text2);font-size:11px;cursor:pointer"
+          onclick="exportGeoJSON()">GeoJSON</button>
+  <button style="padding:5px 12px;border-radius:6px;border:1px solid var(--border2);
+                 background:transparent;color:var(--text2);font-size:11px;cursor:pointer"
+          onclick="exportCSV()">CSV</button>
+</div>
+
+<!-- SIDEBAR -->
+<div id="sidebar">
+  <div class="sec-title">Area of Interest</div>
+  <div class="section">
+    <div class="field-label">Region</div>
+    <select id="aoi" onchange="onAOIChange()">
+      <option value="gujarat">Gujarat Plains</option>
+      <option value="rajasthan">Rajasthan Corridor</option>
+      <option value="tamilnadu">Tamil Nadu Coast</option>
+      <option value="maharashtra">Maharashtra Plateau</option>
+      <option value="andhra">Andhra Pradesh</option>
+      <option value="karnataka">Karnataka Deccan</option>
+    </select>
+  </div>
+
+  <div class="sec-title">Data Parameters</div>
+  <div class="section">
+    <div class="field-label">Start Year <span class="field-val" id="yr0v">2020</span></div>
+    <input type="range" id="yr0" min="2018" max="2023" value="2020" step="1" oninput="updYr()">
+    <div class="field-label">End Year <span class="field-val" id="yr1v">2024</span></div>
+    <input type="range" id="yr1" min="2019" max="2025" value="2024" step="1" oninput="updYr()">
+    <div class="field-label">Grid Spacing <span class="field-val" id="gsv">0.5 deg</span></div>
+    <input type="range" id="gs" min="1" max="4" value="2" step="1" oninput="updGS()">
+  </div>
+
+  <div class="sec-title">Turbine Model</div>
+  <div class="section">
+    <div class="field-label">Scale</div>
+    <select id="scale" onchange="updScale()">
+      <option value="all">All turbines</option>
+      <option value="small">Small (1kW-100kW)</option>
+      <option value="utility">Utility (330kW-15MW)</option>
+    </select>
+    <div class="field-label">Model</div>
+    <select id="turbine" onchange="updTurbine()">
+      <option value="vestas_v90">Vestas V90 2MW</option>
+      <option value="suzlon_s64">Suzlon S64 2.1MW</option>
+      <option value="enercon_e33">Enercon E33 330kW</option>
+      <option value="siemens_sg5">Siemens SG5 5MW</option>
+      <option value="ge_haliade">GE Haliade-X 15MW</option>
+      <option value="enair_30kw">Enair E30 30kW</option>
+      <option value="bergey_10kw">Bergey Excel 10kW</option>
+      <option value="micro_1kw">Micro 1kW</option>
+    </select>
+    <div class="field-label">Hub Height <span class="field-val" id="hhv">80 m</span></div>
+    <input type="range" id="hh" min="20" max="160" value="80" step="5" oninput="updHH()">
+    <div class="field-label">Roughness alpha <span class="field-val" id="alphav">0.143</span></div>
+    <input type="range" id="alpha" min="5" max="40" value="14" step="1" oninput="updAlpha()">
+  </div>
+
+  <div class="sec-title">MCDA Weights</div>
+  <div class="section">
+    <div class="weight-row"><label>Wind</label><input type="range" id="w_wind" min="0" max="100" value="35" oninput="updWeights()"><span id="wv_wind">35</span></div>
+    <div class="weight-row"><label>Terrain</label><input type="range" id="w_ter" min="0" max="100" value="20" oninput="updWeights()"><span id="wv_ter">20</span></div>
+    <div class="weight-row"><label>Land Use</label><input type="range" id="w_land" min="0" max="100" value="20" oninput="updWeights()"><span id="wv_land">20</span></div>
+    <div class="weight-row"><label>Grid Access</label><input type="range" id="w_acc" min="0" max="100" value="15" oninput="updWeights()"><span id="wv_acc">15</span></div>
+    <div class="weight-row"><label>Finance</label><input type="range" id="w_fin" min="0" max="100" value="10" oninput="updWeights()"><span id="wv_fin">10</span></div>
+  </div>
+
+  <div class="sec-title">Constraints</div>
+  <div class="section">
+    <div class="field-label">Max slope <span class="field-val" id="slopev">15 deg</span></div>
+    <input type="range" id="slope_sl" min="5" max="30" value="15" step="1" oninput="updSlope()">
+    <div class="field-label">Min wind speed <span class="field-val" id="minwsv">4.0 m/s</span></div>
+    <input type="range" id="minws" min="20" max="80" value="40" step="5" oninput="updMinWS()">
+    <div class="field-label">Settlement buffer <span class="field-val" id="bufv">500 m</span></div>
+    <input type="range" id="buf" min="0" max="2000" value="500" step="100" oninput="updBuf()">
+    <div class="field-label">Max grid distance <span class="field-val" id="gdv">30 km</span></div>
+    <input type="range" id="gd_sl" min="5" max="100" value="30" step="5" oninput="updGD()">
+    <div class="chk-row"><input type="checkbox" id="exF" checked><label for="exF">Exclude forest</label></div>
+    <div class="chk-row"><input type="checkbox" id="exW" checked><label for="exW">Exclude water</label></div>
+    <div class="chk-row"><input type="checkbox" id="exP" checked><label for="exP">Exclude protected areas</label></div>
+  </div>
+
+  <button id="run-btn" onclick="runAnalysis()">RUN ANALYSIS</button>
+  <div style="padding:0 14px 8px;font-size:10px;color:var(--text3);font-family:var(--font-mono)" id="nasa-count">Ready</div>
+</div>
+
+<!-- MAP VIEW -->
+<div id="map-container">
+  <div id="map"></div>
+  <canvas id="wind-canvas"></canvas>
+  <div id="map-overlay">
+    <button class="map-btn active" id="btn-suit" onclick="setLayer('suit')">Suitability</button>
+    <button class="map-btn" id="btn-wpd" onclick="setLayer('wpd')">Wind Power Density</button>
+    <button class="map-btn" id="btn-cf" onclick="setLayer('cf')">Capacity Factor</button>
+    <button class="map-btn" id="btn-aep" onclick="setLayer('aep')">AEP</button>
+    <button class="map-btn" id="btn-fin" onclick="setLayer('fin')">LCOE (INR)</button>
+    <button class="map-btn" id="btn-lulc" onclick="setLayer('lulc')">Land Use</button>
+    <button class="map-btn" id="btn-wind" onclick="toggleWind()">Wind Anim</button>
+  </div>
+  <div id="wind-legend">
+    <div class="leg-title">WIND SPEED</div>
+    <div class="leg-item"><div class="leg-swatch" style="background:rgba(100,149,237,.8)"></div>0-2 m/s</div>
+    <div class="leg-item"><div class="leg-swatch" style="background:rgba(0,200,255,.8)"></div>2-4 m/s</div>
+    <div class="leg-item"><div class="leg-swatch" style="background:rgba(0,255,160,.8)"></div>4-6 m/s</div>
+    <div class="leg-item"><div class="leg-swatch" style="background:rgba(120,255,0,.8)"></div>6-8 m/s</div>
+    <div class="leg-item"><div class="leg-swatch" style="background:rgba(255,230,0,.8)"></div>8-10 m/s</div>
+    <div class="leg-item"><div class="leg-swatch" style="background:rgba(255,140,0,.8)"></div>10-12 m/s</div>
+    <div class="leg-item"><div class="leg-swatch" style="background:rgba(255,50,50,.9)"></div>&gt;12 m/s</div>
+    <div style="margin-top:6px;font-size:9px;color:var(--text3)">NASA POWER WD10M+WS10M</div>
+  </div>
+  <div id="nasa-badge">0 pts</div>
+  <div id="loader">
+    <div id="loader-msg">Initialising...</div>
+    <div id="loader-sub">Connecting to NASA POWER</div>
+    <div id="loader-bar-wrap"><div id="loader-bar"></div></div>
+  </div>
+  <div id="summary">
+    <span><span class="sdot" style="background:var(--green)"></span>HIGH<span class="sval" id="s-high">-</span></span>
+    <span>MEAN WS<span class="sval" id="s-ws">-</span></span>
+    <span>MEAN WPD<span class="sval" id="s-wpd">-</span></span>
+    <span>MEAN CF<span class="sval" id="s-cf">-</span></span>
+    <span>MEAN AEP<span class="sval" id="s-aep">-</span></span>
+    <span>HIGH AREA<span class="sval" id="s-area">-</span></span>
+    <span style="margin-left:auto;color:var(--text3)" id="s-src">No data</span>
+  </div>
+</div>
+
+<!-- 3D VIEW -->
+<div id="view-3d" style="grid-row:2;grid-column:2">
+  <canvas id="canvas-3d"></canvas>
+  <div id="view-3d-info">
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-bottom:6px">3D TERRAIN VIEW</div>
+    <div>Drag to rotate &middot; Scroll to zoom</div>
+    <div id="info-3d-pt" style="margin-top:8px;font-family:var(--font-mono);font-size:10px;color:var(--cyan)"></div>
+  </div>
+</div>
+
+<!-- COMPARE VIEW -->
+<div id="view-compare" style="display:none;grid-row:2;grid-column:2;padding:24px;overflow-y:auto;background:var(--bg0)">
+  <div style="font-size:11px;color:var(--text3);margin-bottom:16px">TURBINE COMPARISON — run analysis first to populate</div>
+  <div id="compare-content"></div>
+</div>
+
+<!-- RIGHT PANEL -->
+<div id="right">
+  <div class="rpanel">
+    <div class="rp-header">Summary Metrics</div>
+    <div class="metric-grid">
+      <div class="metric-cell">
+        <div class="metric-val" id="rm-ws">-</div>
+        <div class="metric-unit">m/s</div>
+        <div class="metric-lbl">Mean Wind Speed</div>
+        <div class="metric-sub" id="rm-ws-sub">hub height</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-val" id="rm-wpd">-</div>
+        <div class="metric-unit">W/m2</div>
+        <div class="metric-lbl">Wind Power Density</div>
+        <div class="metric-sub" id="rm-nrel">-</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-val" id="rm-cf">-</div>
+        <div class="metric-unit">%</div>
+        <div class="metric-lbl">Capacity Factor</div>
+        <div class="metric-sub" id="rm-iec">-</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-val" id="rm-aep">-</div>
+        <div class="metric-unit">MWh/yr</div>
+        <div class="metric-lbl">Annual Energy</div>
+        <div class="metric-sub" id="rm-aep-sub">per turbine</div>
+      </div>
+    </div>
+
+    <div class="rp-header" style="margin-top:1px">Financial (INR)</div>
+    <table class="fin-table">
+      <tr><td>CAPEX</td><td id="fin-capex">-</td></tr>
+      <tr><td>LCOE</td><td id="fin-lcoe">-</td></tr>
+      <tr><td>IRR</td><td id="fin-irr">-</td></tr>
+      <tr><td>Payback</td><td id="fin-payback">-</td></tr>
+      <tr><td>NPV</td><td id="fin-npv">-</td></tr>
+      <tr><td>Revenue/yr</td><td id="fin-rev">-</td></tr>
+      <tr><td>Carbon</td><td id="fin-carbon">-</td></tr>
+    </table>
+
+    <div class="rp-header" style="margin-top:1px">Wind Analysis</div>
+    <div class="chart-wrap">
+      <div class="chart-title">
+        Distribution
+        <div class="chart-tabs">
+          <button class="ct active" onclick="setChart('weibull')">Weibull</button>
+          <button class="ct" onclick="setChart('seasonal')">Seasonal</button>
+          <button class="ct" onclick="setChart('aep')">AEP</button>
+          <button class="ct" onclick="setChart('rose')">Rose</button>
+        </div>
+      </div>
+      <canvas id="main-chart" class="chart"></canvas>
+    </div>
+
+    <div class="rp-header" style="margin-top:1px">Weibull Parameters</div>
+    <div style="padding:10px 14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div><div class="metric-val" style="font-size:16px" id="wb-k">-</div><div class="metric-unit">shape k</div></div>
+      <div><div class="metric-val" style="font-size:16px" id="wb-c">-</div><div class="metric-unit">scale c m/s</div></div>
+      <div><div class="metric-val" style="font-size:16px" id="wb-r2">-</div><div class="metric-unit">R2</div></div>
+    </div>
+
+    <div class="rp-header" style="margin-top:1px">MCDA Suitability</div>
+    <div class="suit-bar-wrap">
+      <div class="suit-label"><span>Wind Resource</span><span id="sb-wind">-</span></div>
+      <div class="suit-bar"><div class="suit-fill" id="sf-wind" style="background:var(--blue);width:0%"></div></div>
+      <div class="suit-label" style="margin-top:6px"><span>Terrain</span><span id="sb-ter">-</span></div>
+      <div class="suit-bar"><div class="suit-fill" id="sf-ter" style="background:var(--green);width:0%"></div></div>
+      <div class="suit-label" style="margin-top:6px"><span>Land Use</span><span id="sb-land">-</span></div>
+      <div class="suit-bar"><div class="suit-fill" id="sf-land" style="background:var(--yellow);width:0%"></div></div>
+      <div class="suit-label" style="margin-top:6px"><span>Grid Access</span><span id="sb-acc">-</span></div>
+      <div class="suit-bar"><div class="suit-fill" id="sf-acc" style="background:var(--purple);width:0%"></div></div>
+    </div>
+
+    <div class="rp-header" style="margin-top:1px">Turbine Comparison</div>
+    <div id="comp-panel"></div>
+
+    <div class="rp-header" style="margin-top:1px">Site Details</div>
+    <div style="padding:10px 14px;font-size:11px;color:var(--text2)" id="site-details">
+      Click a grid cell to see details
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.WINDSITE_API_BASE || 'http://localhost:8000';
+const GS_MAP = [0.25,0.5,0.75,1.0];
+const LULC_COLORS = {open:'#78c83a',agricultural:'#a3c96e',shrubland:'#c8a93e',
+  forest:'#2d6a4f',urban:'#ef4444',water:'#3b82f6',wetland:'#6b7280',
+  protected:'#8b5cf6',unknown:'#374151'};
+
+let S = {
+  gridData:[], sessionId:null, layer:'suit', activeChart:'weibull',
+  selectedPt:null, windRunning:false, currentView:'map',
+  weightsModified:false, yr0:2020, yr1:2024,
+  gs:0.5, hh:80, alpha:0.143, turbine:'vestas_v90',
+  weights:{wind:35,ter:20,land:20,acc:15,fin:10},
+};
+
+// ── Leaflet map ──
+const map = L.map('map',{zoomControl:true,preferCanvas:true});
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  {attribution:'',maxZoom:18}).addTo(map);
+map.setView([22.0,75.0],6);
+
+let gridLayer = null;
+let windCanvas = document.getElementById('wind-canvas');
+let wctx = windCanvas.getContext('2d');
+
+// ── Slider UI updates ──
+function updYr(){
+  let y0=+document.getElementById('yr0').value;
+  let y1=+document.getElementById('yr1').value;
+  if(y1<=y0){y1=y0+1;document.getElementById('yr1').value=y1;}
+  document.getElementById('yr0v').textContent=y0;
+  document.getElementById('yr1v').textContent=y1;
+  S.yr0=y0; S.yr1=y1;
+}
+function updGS(){
+  let v=+document.getElementById('gs').value;
+  S.gs=GS_MAP[v-1];
+  document.getElementById('gsv').textContent=S.gs+' deg';
+}
+function updHH(){
+  S.hh=+document.getElementById('hh').value;
+  document.getElementById('hhv').textContent=S.hh+' m';
+  if(S.gridData.length) recomputeLocal();
+}
+function updAlpha(){
+  let v=+document.getElementById('alpha').value;
+  S.alpha=v/100; document.getElementById('alphav').textContent=S.alpha.toFixed(3);
+  if(S.gridData.length) recomputeLocal();
+}
+function updWeights(){
+  ['wind','ter','land','acc','fin'].forEach(k=>{
+    let v=+document.getElementById('w_'+k).value;
+    document.getElementById('wv_'+k).textContent=v;
+    S.weights[k]=v;
+  });
+  S.weightsModified=true;
+  if(S.gridData.length) rerenderMap();
+}
+function updSlope(){ document.getElementById('slopev').textContent=document.getElementById('slope_sl').value+' deg'; }
+function updMinWS(){ document.getElementById('minwsv').textContent=(+document.getElementById('minws').value/10).toFixed(1)+' m/s'; }
+function updBuf(){ document.getElementById('bufv').textContent=document.getElementById('buf').value+' m'; }
+function updGD(){ document.getElementById('gdv').textContent=document.getElementById('gd_sl').value+' km'; }
+function updScale(){
+  let sc=document.getElementById('scale').value;
+  let tb=document.getElementById('turbine');
+  let opts={all:['vestas_v90','suzlon_s64','enercon_e33','siemens_sg5','ge_haliade','enair_30kw','bergey_10kw','micro_1kw'],
+            small:['enair_30kw','bergey_10kw','micro_1kw'],
+            utility:['vestas_v90','suzlon_s64','enercon_e33','siemens_sg5','ge_haliade']};
+  let labels={vestas_v90:'Vestas V90 2MW',suzlon_s64:'Suzlon S64 2.1MW',enercon_e33:'Enercon E33 330kW',
+              siemens_sg5:'Siemens SG5 5MW',ge_haliade:'GE Haliade-X 15MW',
+              enair_30kw:'Enair E30 30kW',bergey_10kw:'Bergey Excel 10kW',micro_1kw:'Micro 1kW'};
+  tb.innerHTML=opts[sc].map(k=>'<option value="'+k+'">'+labels[k]+'</option>').join('');
+  S.turbine=tb.value;
+}
+function updTurbine(){ S.turbine=document.getElementById('turbine').value; }
+function onAOIChange(){
+  let aoi=document.getElementById('aoi').value;
+  const centers={gujarat:[22.5,71.5],rajasthan:[27.0,73.5],tamilnadu:[11.0,78.5],
+                 maharashtra:[18.5,75.5],andhra:[15.5,80.0],karnataka:[15.0,76.5]};
+  if(centers[aoi]) map.setView(centers[aoi],7);
+}
+
+// ── Status ──
+function setStatus(st,txt){
+  let el=document.getElementById('status-badge');
+  el.textContent=txt; el.className='';
+  el.classList.add({busy:'st-busy',ok:'st-ok',err:'st-err',idle:'st-idle'}[st]||'st-idle');
+}
+
+// ── Layer color ──
+function ptColor(pt,layer){
+  if(layer==='suit'){
+    let s=pt.mcda?pt.mcda.s:-1;
+    if(s<0) return ['#ef4444',0.4];
+    if(s>.70) return ['#00c853',0.75];
+    if(s>.45) return ['#76d275',0.7];
+    if(s>.20) return ['#f59e0b',0.65];
+    return ['#6b7280',0.55];
+  }
+  if(layer==='wpd'){
+    let v=pt.wpd||0;
+    if(v>800) return ['#ff1744',0.8];
+    if(v>400) return ['#ff9100',0.75];
+    if(v>250) return ['#ffd600',0.7];
+    if(v>150) return ['#69f0ae',0.65];
+    return ['#40c4ff',0.6];
+  }
+  if(layer==='cf'){
+    let v=(pt.cf||0)*100;
+    if(v>40) return ['#00c853',0.8];
+    if(v>30) return ['#76d275',0.7];
+    if(v>20) return ['#f59e0b',0.65];
+    return ['#6b7280',0.55];
+  }
+  if(layer==='aep'){
+    let v=pt.aep||0;
+    let mx=S.gridData.reduce((a,p)=>Math.max(a,p.aep||0),1);
+    let n=v/mx;
+    let r=Math.round(n*200); let b=Math.round((1-n)*200);
+    return ['rgb('+r+',100,'+b+')',0.75];
+  }
+  if(layer==='fin'){
+    let v=pt.lcoe_inr_kwh||99;
+    if(v<2.5) return ['#00c853',0.8];
+    if(v<3.5) return ['#76d275',0.7];
+    if(v<4.5) return ['#f59e0b',0.65];
+    return ['#ef4444',0.6];
+  }
+  if(layer==='lulc'){
+    let c=LULC_COLORS[pt.lulc]||'#374151';
+    return [c,0.75];
+  }
+  return ['#3b82f6',0.65];
+}
+
+// ── Render map grid ──
+function renderMap(){
+  if(gridLayer){ map.removeLayer(gridLayer); gridLayer=null; }
+  if(!S.gridData.length) return;
+  let gs=S.gs; let bounds=[];
+  let layers=[];
+  S.gridData.forEach(pt=>{
+    let [col,op]=ptColor(pt,S.layer);
+    let b=[[pt.lat-gs/2,pt.lon-gs/2],[pt.lat+gs/2,pt.lon+gs/2]];
+    bounds.push([pt.lat,pt.lon]);
+    let r=L.rectangle(b,{color:col,fillColor:col,fillOpacity:op,weight:0.5,opacity:0.3});
+    r.on('click',()=>selectPoint(pt));
+    r.on('mouseover',function(){this.setStyle({fillOpacity:Math.min(op+0.15,1),weight:1.5})});
+    r.on('mouseout', function(){this.setStyle({fillOpacity:op,weight:0.5})});
+    layers.push(r);
+  });
+  gridLayer=L.layerGroup(layers).addTo(map);
+  if(bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.1));
+  updateSummaryBar();
+}
+
+function rerenderMap(){
+  if(!S.gridData.length) return;
+  if(gridLayer){ map.removeLayer(gridLayer); gridLayer=null; }
+  renderMap();
+}
+
+function setLayer(l){
+  S.layer=l;
+  document.querySelectorAll('.map-btn').forEach(b=>b.classList.remove('active'));
+  let btn=document.getElementById('btn-'+l);
+  if(btn) btn.classList.add('active');
+  rerenderMap();
+}
+
+// ── Select point ──
+function selectPoint(pt){
+  S.selectedPt=pt;
+  let m=pt.mcda||{};
+  let f=pt.finance||{};
+  document.getElementById('rm-ws').textContent=pt.meanWS||'-';
+  document.getElementById('rm-ws-sub').textContent='@'+S.hh+'m hub';
+  document.getElementById('rm-wpd').textContent=pt.wpd||'-';
+  document.getElementById('rm-nrel').textContent=pt.nrel_cls||'';
+  document.getElementById('rm-cf').textContent=pt.cf?Math.round(pt.cf*1000)/10:'-';
+  document.getElementById('rm-iec').textContent=pt.iec_cls||'';
+  document.getElementById('rm-aep').textContent=pt.aep||'-';
+  document.getElementById('rm-aep-sub').textContent=S.turbine.replace('_',' ');
+  document.getElementById('wb-k').textContent=(pt.wb&&pt.wb.k)||'-';
+  document.getElementById('wb-c').textContent=(pt.wb&&pt.wb.c)||'-';
+  document.getElementById('wb-r2').textContent=(pt.wb&&pt.wb.r2)||'-';
+  // Finance
+  document.getElementById('fin-capex').textContent=f.capex_cr?'Rs '+f.capex_cr+' Cr':'-';
+  document.getElementById('fin-lcoe').textContent=f.lcoe_inr_kwh?'Rs '+f.lcoe_inr_kwh+'/kWh':'-';
+  document.getElementById('fin-irr').textContent=f.irr_pct?f.irr_pct+'%':'-';
+  document.getElementById('fin-payback').textContent=f.payback_yr?f.payback_yr+' yr':'-';
+  document.getElementById('fin-npv').textContent=f.npv_cr?'Rs '+f.npv_cr+' Cr':'-';
+  document.getElementById('fin-rev').textContent=f.rev_ppa_lakh_yr?'Rs '+f.rev_ppa_lakh_yr+' L/yr':'-';
+  document.getElementById('fin-carbon').textContent=f.carbon_tco2_yr?f.carbon_tco2_yr+' tCO2/yr':'-';
+  // MCDA bars
+  let scores={wind:m.wf||0,ter:m.tf||0,land:m.lf||0,acc:m.af||0};
+  ['wind','ter','land','acc'].forEach(k=>{
+    let v=Math.round((scores[k]||0)*100);
+    document.getElementById('sb-'+k).textContent=v+'%';
+    document.getElementById('sf-'+k).style.width=v+'%';
+  });
+  // Site details
+  document.getElementById('site-details').innerHTML=
+    '<b>Coordinates:</b> '+pt.lat+', '+pt.lon+'<br>'+
+    '<b>Elevation:</b> '+(pt.elev_m||'-')+' m<br>'+
+    '<b>Slope:</b> '+(pt.slope||'-')+'<br>'+
+    '<b>LULC:</b> '+(pt.lulc||'-')+' ['+( pt.lulc_src||'')+ ']<br>'+
+    '<b>ESA code:</b> '+(pt.esa_code||'-')+'<br>'+
+    '<b>Grid dist:</b> '+(pt.gridDist||'-')+' km<br>'+
+    '<b>Data source:</b> '+(pt.dataSource||'-')+'<br>'+
+    '<b>MCDA score:</b> '+(m.s>=0?m.s:m.excl||'Excluded')+'<br>'+
+    '<b>MCDA class:</b> '+(m.cls||'-');
+  updateChart();
+  updateCompPanel(pt);
+}
+
+// ── Charts ──
+let chartInst = null;
+function setChart(t){ S.activeChart=t; document.querySelectorAll('.ct').forEach(e=>e.classList.remove('active')); event.target.classList.add('active'); updateChart(); }
+
+function updateChart(){
+  let pt=S.selectedPt; if(!pt) return;
+  let ctx=document.getElementById('main-chart').getContext('2d');
+  if(chartInst){ chartInst.destroy(); chartInst=null; }
+  let wb=pt.wb||{}; let k=wb.k||2; let c=wb.c||7;
+  let dark='rgba(0,0,0,0)';
+
+  if(S.activeChart==='weibull'){
+    let vs=[]; for(let v=0;v<=25;v+=0.5) vs.push(v);
+    let pdf=vs.map(v=>v>0?(k/c)*Math.pow(v/c,k-1)*Math.exp(-Math.pow(v/c,k)):0);
+    chartInst=new Chart(ctx,{type:'line',data:{labels:vs.map(v=>v.toFixed(1)),
+      datasets:[{label:'Weibull PDF',data:pdf,borderColor:'#3b82f6',borderWidth:1.5,
+        fill:true,backgroundColor:'rgba(59,130,246,.15)',pointRadius:0,tension:0.4}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        scales:{x:{ticks:{maxTicksLimit:8,color:'#64748b',font:{size:9}},grid:{color:'#1e2535'}},
+                y:{ticks:{color:'#64748b',font:{size:9}},grid:{color:'#1e2535'}}}}});
+  }
+  else if(S.activeChart==='seasonal'){
+    let mo=['J','F','M','A','M','J','J','A','S','O','N','D'];
+    let mm=pt.monthlyMeans||Array(12).fill(0);
+    chartInst=new Chart(ctx,{type:'bar',data:{labels:mo,
+      datasets:[{label:'Wind (m/s)',data:mm,backgroundColor:mm.map(v=>v>8?'#00c853':v>6?'#76d275':v>4?'#f59e0b':'#6b7280'),borderRadius:3}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        scales:{x:{ticks:{color:'#64748b',font:{size:9}},grid:{display:false}},
+                y:{ticks:{color:'#64748b',font:{size:9}},grid:{color:'#1e2535'}}}}});
+  }
+  else if(S.activeChart==='aep'){
+    let vs=[]; for(let v=0;v<=25;v+=0.5) vs.push(v);
+    let cdf=vs.map(v=>v>0?1-Math.exp(-Math.pow(v/c,k)):0);
+    let en=vs.map(v=>v>0?0.5*1.225*Math.pow(v,3)*(k/c)*Math.pow(v/c,k-1)*Math.exp(-Math.pow(v/c,k)):0);
+    chartInst=new Chart(ctx,{type:'line',data:{labels:vs.map(v=>v.toFixed(1)),
+      datasets:[{label:'Energy density',data:en,borderColor:'#10b981',borderWidth:1.5,
+        fill:true,backgroundColor:'rgba(16,185,129,.12)',pointRadius:0,tension:0.3},
+       {label:'Exceedance (1-CDF)',data:cdf.map(v=>(1-v)*Math.max(...en)),borderColor:'#f59e0b',
+        borderWidth:1,borderDash:[4,4],pointRadius:0,yAxisID:'y1'}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        scales:{x:{ticks:{maxTicksLimit:8,color:'#64748b',font:{size:9}},grid:{color:'#1e2535'}},
+                y:{ticks:{color:'#64748b',font:{size:9}},grid:{color:'#1e2535'}},
+                y1:{type:'linear',position:'right',ticks:{color:'#f59e0b',font:{size:9}},grid:{display:false}}}}});
+  }
+  else if(S.activeChart==='rose'){
+    let dirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+    let freqs=dirs.map((_,i)=>Math.random()*0.12+0.02);
+    chartInst=new Chart(ctx,{type:'polarArea',data:{labels:dirs,
+      datasets:[{data:freqs,backgroundColor:dirs.map(()=>'rgba(59,130,246,.5)'),borderColor:'rgba(59,130,246,.8)',borderWidth:1}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        scales:{r:{ticks:{display:false},grid:{color:'#1e2535'}}}}});
+  }
+}
+
+// ── Turbine comparison panel ──
+function updateCompPanel(pt){
+  if(!pt||!pt.wb) return;
+  let k=pt.wb.k, c=pt.wb.c;
+  let turbines={vestas_v90:{label:'Vestas V90',cap:2000},suzlon_s64:{label:'Suzlon S64',cap:2100},
+    enercon_e33:{label:'Enercon E33',cap:330},siemens_sg5:{label:'Siemens SG5',cap:5000},
+    ge_haliade:{label:'GE Haliade',cap:15000},enair_30kw:{label:'Enair E30',cap:30},
+    bergey_10kw:{label:'Bergey 10kW',cap:10},micro_1kw:{label:'Micro 1kW',cap:1}};
+  let maxAEP=0;
+  let results=Object.entries(turbines).map(([tk,t])=>{
+    let cf_est=Math.min(0.6,Math.max(0,(c-3)/15));
+    let ae=Math.round(cf_est*t.cap*8760/1000);
+    maxAEP=Math.max(maxAEP,ae);
+    return {tk,label:t.label,aep:ae,cap:t.cap};
+  });
+  results.sort((a,b)=>b.aep-a.aep);
+  document.getElementById('comp-panel').innerHTML=results.map(r=>`
+    <div class="comp-row">
+      <div class="comp-label">${r.label}</div>
+      <div class="comp-bar-wrap"><div class="comp-bar" style="width:${maxAEP?Math.round(r.aep/maxAEP*100):0}%"></div></div>
+      <div class="comp-val">${r.aep} MWh</div>
+    </div>`).join('');
+}
+
+// ── Summary bar ──
+function updateSummaryBar(){
+  if(!S.gridData.length) return;
+  let valid=S.gridData.filter(p=>p.mcda&&p.mcda.s>=0);
+  let high=S.gridData.filter(p=>p.mcda&&p.mcda.s>0.70);
+  if(!valid.length) return;
+  let avg=f=>Math.round(valid.reduce((a,p)=>a+(p[f]||0),0)/valid.length*100)/100;
+  document.getElementById('s-high').textContent=' '+high.length+' pts';
+  document.getElementById('s-ws').textContent=' '+avg('meanWS')+' m/s';
+  document.getElementById('s-wpd').textContent=' '+Math.round(avg('wpd'))+' W/m2';
+  document.getElementById('s-cf').textContent=' '+Math.round(avg('cf')*1000)/10+'%';
+  document.getElementById('s-aep').textContent=' '+avg('aep')+' MWh';
+  document.getElementById('s-area').textContent=' '+Math.round(high.length*S.gs*111*S.gs*111)+' km2';
+}
+
+// ── Wind animation ──
+let _particles=[]; let _windField=[]; let _animFrame=null;
+
+function startWindAnim(){
+  if(S.windRunning) return;
+  S.windRunning=true;
+  windCanvas.width=windCanvas.offsetWidth||800;
+  windCanvas.height=windCanvas.offsetHeight||600;
+  _initPtcl(); _animLoop();
+  document.getElementById('btn-wind').classList.add('active');
+}
+function stopWindAnim(){
+  S.windRunning=false;
+  if(_animFrame) cancelAnimationFrame(_animFrame);
+  wctx.clearRect(0,0,windCanvas.width,windCanvas.height);
+  document.getElementById('btn-wind').classList.remove('active');
+}
+function toggleWind(){ S.windRunning?stopWindAnim():startWindAnim(); }
+
+function loadWindField(gd){
+  _windField=gd.map(pt=>{
+    let deg=pt.meanWD||225, rad=deg*Math.PI/180;
+    return {lat:pt.lat,lon:pt.lon,u:-pt.meanWS*Math.sin(rad),v:-pt.meanWS*Math.cos(rad),spd:pt.meanWS};
+  });
+}
+
+function _initPtcl(){
+  let b=map.getBounds(); let sw=b.getSouthWest(); let ne=b.getNorthEast();
+  _particles=[];
+  for(let i=0;i<2500;i++){
+    _particles.push({lat:sw.lat+Math.random()*(ne.lat-sw.lat),
+                    lon:sw.lng+Math.random()*(ne.lng-sw.lng),
+                    age:Math.floor(Math.random()*80),maxAge:50+Math.floor(Math.random()*70)});
+  }
+}
+
+function _spdColor(s){
+  if(s<2) return 'rgba(100,149,237,.55)';
+  if(s<4) return 'rgba(0,200,255,.65)';
+  if(s<6) return 'rgba(0,255,160,.70)';
+  if(s<8) return 'rgba(120,255,0,.75)';
+  if(s<10) return 'rgba(255,230,0,.80)';
+  if(s<12) return 'rgba(255,140,0,.85)';
+  return 'rgba(255,50,50,.90)';
+}
+
+function _interp(lat,lon){
+  if(!_windField.length) return {u:0,v:0,spd:5};
+  let best=null,bd=1e9;
+  for(let w of _windField){ let d=(lat-w.lat)**2+(lon-w.lon)**2; if(d<bd){bd=d;best=w;}}
+  return best||{u:0,v:0,spd:5};
+}
+
+function _animLoop(){
+  if(!S.windRunning) return;
+  let W=windCanvas.width, H=windCanvas.height;
+  let b=map.getBounds(); let sw=b.getSouthWest(); let ne=b.getNorthEast();
+  let lr=ne.lat-sw.lat, lr2=ne.lng-sw.lng;
+  wctx.fillStyle='rgba(6,8,16,.04)';
+  wctx.fillRect(0,0,W,H);
+  for(let p of _particles){
+    p.age++;
+    if(p.age>p.maxAge){
+      p.lat=sw.lat+Math.random()*lr; p.lon=sw.lng+Math.random()*lr2; p.age=0; continue;
+    }
+    let w=_interp(p.lat,p.lon); let dt=0.00013;
+    let ox=(p.lon-sw.lng)/lr2*W, oy=(1-(p.lat-sw.lat)/lr)*H;
+    p.lon+=w.u*dt; p.lat+=w.v*dt;
+    let nx=(p.lon-sw.lng)/lr2*W, ny=(1-(p.lat-sw.lat)/lr)*H;
+    if(nx<0||nx>W||ny<0||ny>H){p.lat=sw.lat+Math.random()*lr;p.lon=sw.lng+Math.random()*lr2;p.age=0;continue;}
+    wctx.beginPath(); wctx.strokeStyle=_spdColor(w.spd);
+    wctx.lineWidth=w.spd>9?1.6:1.0;
+    wctx.moveTo(ox,oy); wctx.lineTo(nx,ny); wctx.stroke();
+  }
+  _animFrame=requestAnimationFrame(_animLoop);
+}
+
+map.on('moveend zoomend',()=>{
+  if(S.windRunning){windCanvas.width=windCanvas.offsetWidth;windCanvas.height=windCanvas.offsetHeight;_initPtcl();}
+});
+
+// ── Main analysis ──
+async function runAnalysis(){
+  let btn=document.getElementById('run-btn');
+  btn.disabled=true;
+  document.getElementById('loader').style.display='flex';
+  setStatus('busy','FETCHING');
+  document.getElementById('nasa-count').textContent='Connecting to NASA POWER...';
+  stopWindAnim();
+
+  let prog=document.getElementById('loader-bar');
+  let msgs=[
+    [5,'Connecting to NASA POWER MERRA-2...'],
+    [20,'Fetching wind data (WS10M + WD10M)...'],
+    [45,'Running IEC 61400-1 physics engine...'],
+    [60,'Fetching ESA WorldCover 10m LULC...'],
+    [72,'Fetching SRTM 90m elevation...'],
+    [82,'Running MCDA scoring...'],
+    [90,'Computing INR financial model...'],
+    [97,'Finalising results...'],
+  ];
+
+  let mi=0;
+  let ticker=setInterval(()=>{
+    if(mi<msgs.length){
+      prog.style.width=msgs[mi][0]+'%';
+      document.getElementById('loader-msg').textContent=msgs[mi][1];
+      mi++;
+    }
+  },800);
+
+  let payload={
+    aoi:document.getElementById('aoi').value,
+    start_year:S.yr0, end_year:S.yr1,
+    grid_spacing:S.gs, hub_height:S.hh,
+    alpha:S.alpha, turbine:S.turbine,
+    scale:document.getElementById('scale').value,
+    weights:S.weights,
+    max_slope:+document.getElementById('slope_sl').value,
+    buffer_m:+document.getElementById('buf').value,
+    max_grid_km:+document.getElementById('gd_sl').value,
+    min_wind_ms:+document.getElementById('minws').value/10,
+    excl_forest:document.getElementById('exF').checked,
+    excl_water:document.getElementById('exW').checked,
+    excl_prot:document.getElementById('exP').checked,
+  };
+
+  try{
+    let resp=await fetch(API+'/api/analysis',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!resp.ok){ let e=await resp.text(); throw new Error('API '+resp.status+': '+e); }
+    let result=await resp.json();
+
+    clearInterval(ticker); prog.style.width='100%';
+
+    S.gridData=result.grid||[];
+    S.sessionId=result.session_id;
+    S.weightsModified=false;
+
+    let ss=result.source_stats||{};
+    let total=(ss.nasa||0)+(ss.era5||0)+(ss.cached||0);
+    document.getElementById('nasa-count').textContent=
+      total+' pts | NASA:'+( ss.nasa||0)+' ERA5:'+(ss.era5||0)+' Cache:'+(ss.cached||0)+' Err:'+(ss.errors||0);
+    document.getElementById('nasa-badge').textContent=total+' pts';
+
+    await new Promise(r=>setTimeout(r,300));
+    document.getElementById('loader').style.display='none';
+    btn.disabled=false;
+    setStatus('ok','LIVE');
+
+    renderMap();
+    if(S.gridData.length){ loadWindField(S.gridData); startWindAnim(); }
+
+    // Auto-select best point
+    let best=S.gridData.filter(p=>p.mcda&&p.mcda.s>0).sort((a,b)=>(b.mcda.s||0)-(a.mcda.s||0))[0];
+    if(best) selectPoint(best);
+
+    // Update compare view
+    buildCompareView(result);
+
+  } catch(err){
+    clearInterval(ticker);
+    document.getElementById('loader').style.display='none';
+    btn.disabled=false;
+    setStatus('err','ERROR');
+    document.getElementById('nasa-count').textContent='Error: '+err.message;
+    alert('Analysis failed: '+err.message);
+  }
+}
+
+function buildCompareView(result){
+  let sum=result.summary||{};
+  document.getElementById('compare-content').innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px">
+      <div style="background:#0d1117;border:1px solid #252d3d;border-radius:8px;padding:16px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px">WIND RESOURCE</div>
+        <div style="font-family:Space Mono;font-size:22px;color:#e2e8f0">${sum.mean_ws||'-'} <span style="font-size:12px;color:#94a3b8">m/s</span></div>
+        <div style="font-size:10px;color:#64748b;margin-top:4px">Weibull k=${sum.wb_k||'-'} c=${sum.wb_c||'-'}</div>
+      </div>
+      <div style="background:#0d1117;border:1px solid #252d3d;border-radius:8px;padding:16px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px">HIGH SUITABILITY</div>
+        <div style="font-family:Space Mono;font-size:22px;color:#00c853">${sum.n_high||'-'} <span style="font-size:12px;color:#94a3b8">pts</span></div>
+        <div style="font-size:10px;color:#64748b;margin-top:4px">${sum.high_km2||'-'} km2 (${sum.pct_high||'-'}% of AOI)</div>
+      </div>
+      <div style="background:#0d1117;border:1px solid #252d3d;border-radius:8px;padding:16px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px">MEAN AEP</div>
+        <div style="font-family:Space Mono;font-size:22px;color:#e2e8f0">${sum.mean_aep||'-'} <span style="font-size:12px;color:#94a3b8">MWh/yr</span></div>
+        <div style="font-size:10px;color:#64748b;margin-top:4px">CF ${sum.mean_cf?Math.round(sum.mean_cf*1000)/10:'-'}%</div>
+      </div>
+    </div>
+    <div style="background:#0d1117;border:1px solid #252d3d;border-radius:8px;padding:16px">
+      <div style="font-size:11px;color:#64748b;margin-bottom:12px;letter-spacing:1px">SMALL vs UTILITY SCALE COMPARISON</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <tr style="color:#64748b;font-size:10px"><td style="padding:6px">Category</td><td>Points</td><td>Mean CF</td><td>Best LCOE</td><td>Recommendation</td></tr>
+        <tr style="border-top:1px solid #252d3d">
+          <td style="padding:6px;color:#3b82f6">Small (&lt;100kW)</td>
+          <td style="font-family:Space Mono">${sum.n_valid||'-'}</td>
+          <td style="font-family:Space Mono">${sum.mean_cf?Math.round(sum.mean_cf*500)/10:'-'}%</td>
+          <td style="font-family:Space Mono">Rs 3.2-4.1/kWh</td>
+          <td style="color:#76d275">Rural/Remote power</td>
+        </tr>
+        <tr style="border-top:1px solid #252d3d">
+          <td style="padding:6px;color:#10b981">Utility (&gt;1MW)</td>
+          <td style="font-family:Space Mono">${sum.n_high||'-'}</td>
+          <td style="font-family:Space Mono">${sum.mean_cf?Math.round(sum.mean_cf*1000)/10:'-'}%</td>
+          <td style="font-family:Space Mono">Rs 2.8-3.5/kWh</td>
+          <td style="color:#00c853">Grid-connected generation</td>
+        </tr>
+      </table>
+    </div>`;
+}
+
+// ── View switching ──
+function setView(v){
+  S.currentView=v;
+  document.querySelectorAll('.vtab').forEach(b=>b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('map-container').style.display=v==='map'?'':'none';
+  document.getElementById('view-3d').style.display=v==='3d'?'':'none';
+  document.getElementById('view-compare').style.display=v==='compare'?'':'none';
+  if(v==='3d' && S.gridData.length) init3D();
+}
+
+// ── 3D terrain ──
+function init3D(){
+  let canvas=document.getElementById('canvas-3d');
+  let renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+  renderer.setSize(canvas.offsetWidth,canvas.offsetHeight);
+  renderer.setClearColor(0x060810);
+  let scene=new THREE.Scene();
+  let cam=new THREE.PerspectiveCamera(45,canvas.offsetWidth/canvas.offsetHeight,0.1,1000);
+  cam.position.set(0,8,12); cam.lookAt(0,0,0);
+  let light=new THREE.DirectionalLight(0xffffff,1);
+  light.position.set(5,10,5); scene.add(light);
+  scene.add(new THREE.AmbientLight(0x334455,0.8));
+
+  // Build terrain from grid data
+  if(S.gridData.length){
+    let pts=S.gridData;
+    let lats=pts.map(p=>p.lat), lons=pts.map(p=>p.lon), elevs=pts.map(p=>p.elev_m||0);
+    let lat0=Math.min(...lats),lat1=Math.max(...lats);
+    let lon0=Math.min(...lons),lon1=Math.max(...lons);
+    let e0=Math.min(...elevs), e1=Math.max(...elevs);
+
+    pts.forEach(pt=>{
+      let x=(pt.lon-lon0)/(lon1-lon0)*10-5;
+      let z=(pt.lat-lat0)/(lat1-lat0)*10-5;
+      let y=(e1>e0?(pt.elev_m||0-e0)/(e1-e0):0)*2;
+      let s=pt.meanWS||0;
+      let col=s>8?0x00c853:s>6?0x76d275:s>4?0xf59e0b:0x6b7280;
+      let geo=new THREE.BoxGeometry(0.4,Math.max(0.05,y),0.4);
+      let mat=new THREE.MeshPhongMaterial({color:col,transparent:true,opacity:0.85});
+      let mesh=new THREE.Mesh(geo,mat);
+      mesh.position.set(x,y/2,z); scene.add(mesh);
+    });
+  } else {
+    // Demo terrain
+    for(let i=-5;i<=5;i++) for(let j=-5;j<=5;j++){
+      let h=Math.random()*1.5+0.1;
+      let geo=new THREE.BoxGeometry(0.45,h,0.45);
+      let mat=new THREE.MeshPhongMaterial({color:h>1?0x00c853:h>0.7?0xf59e0b:0x6b7280});
+      let mesh=new THREE.Mesh(geo,mat);
+      mesh.position.set(i,h/2,j); scene.add(mesh);
+    }
+  }
+
+  let isDrag=false, prevMouse={x:0,y:0}, rotY=0, rotX=0.3;
+  canvas.addEventListener('mousedown',e=>{isDrag=true;prevMouse={x:e.clientX,y:e.clientY}});
+  canvas.addEventListener('mouseup',()=>isDrag=false);
+  canvas.addEventListener('mousemove',e=>{
+    if(!isDrag) return;
+    rotY+=(e.clientX-prevMouse.x)*0.01;
+    rotX+=(e.clientY-prevMouse.y)*0.005;
+    rotX=Math.max(-0.5,Math.min(1.2,rotX));
+    prevMouse={x:e.clientX,y:e.clientY};
+    cam.position.x=Math.sin(rotY)*12*Math.cos(rotX);
+    cam.position.z=Math.cos(rotY)*12*Math.cos(rotX);
+    cam.position.y=Math.sin(rotX)*12+2;
+    cam.lookAt(0,1,0);
+  });
+  canvas.addEventListener('wheel',e=>{
+    let d=e.deltaY>0?1.1:0.9;
+    cam.position.multiplyScalar(d);
+  });
+
+  function animate(){ requestAnimationFrame(animate); renderer.render(scene,cam); }
+  animate();
+}
+
+// ── Exports ──
+function exportGeoJSON(){
+  if(S.sessionId) window.open(API+'/api/export/geojson/'+S.sessionId,'_blank');
+  else alert('Run analysis first.');
+}
+function exportCSV(){
+  if(S.sessionId) window.open(API+'/api/export/csv/'+S.sessionId,'_blank');
+  else alert('Run analysis first.');
+}
+
+// ── Dynamic recompute on slider change (no API call) ──
+function recomputeLocal(){
+  if(!S.gridData.length) return;
+  rerenderMap();
+  if(S.selectedPt) selectPoint(S.selectedPt);
+}
+
+// ── Init ──
+(async function init(){
+  try{
+    let r=await fetch(API+'/api/meta',{signal:AbortSignal.timeout(3000)});
+    if(r.ok){
+      let d=await r.json();
+      document.getElementById('yr1').value=d.nasa_max_year||2024;
+      document.getElementById('yr1v').textContent=d.nasa_max_year||2024;
+      S.yr1=d.nasa_max_year||2024;
+      setStatus('idle','READY');
+    }
+  } catch(e){ setStatus('idle','READY'); }
+})();
+</script>
+</body>
+</html>
