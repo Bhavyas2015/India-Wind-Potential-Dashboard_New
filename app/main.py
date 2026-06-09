@@ -216,3 +216,161 @@ def export_csv(sid: str):
     return StreamingResponse(
         out, media_type='text/csv',
         headers={'Content-Disposition': 'attachment; filename=windsite_{}.csv'.format(sid)})
+# ── NEW ENDPOINTS ──────────────────────────────────────────────────────────
+
+# Wind Rose
+@app.get('/api/wind_rose')
+async def wind_rose_endpoint(lat: float, lon: float,
+                              start_year: int = 2020, end_year: int = 2023):
+    try:
+        from app.services.wind_rose import compute_wind_rose, wind_rose_to_chartjs
+        raw = await orch_fetch_pt(lat, lon, start_year, end_year)
+        rose = compute_wind_rose(raw.get('ws10', []), raw.get('wd10', []))
+        return {'rose': rose, 'chartjs': wind_rose_to_chartjs(rose), 'lat': lat, 'lon': lon}
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# Wake Loss Model
+@app.post('/api/wake_loss')
+async def wake_loss_endpoint(payload: dict):
+    try:
+        from app.services.wake_loss import farm_aep_with_wake
+        turbines  = payload.get('turbines', [])
+        wb_k      = payload.get('weibull_k', 2.0)
+        wb_c      = payload.get('weibull_c', 7.0)
+        wind_rose = payload.get('wind_rose', None)
+        decay_k   = payload.get('wake_decay_k', 0.075)
+        return farm_aep_with_wake(turbines, wb_k, wb_c, wind_rose, decay_k)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# Farm Layout Optimizer
+@app.post('/api/farm_layout')
+async def farm_layout_endpoint(payload: dict):
+    try:
+        from app.services.farm_layout import optimize_layout
+        return optimize_layout(
+            center_lat     = payload.get('lat', 22.8),
+            center_lon     = payload.get('lon', 71.5),
+            turbine_config = payload.get('turbine_config', {}),
+            weibull_k      = payload.get('weibull_k', 2.0),
+            weibull_c      = payload.get('weibull_c', 7.0),
+            wind_rose      = payload.get('wind_rose', None),
+            max_turbines   = payload.get('max_turbines', 20),
+            area_km2       = payload.get('area_km2', 10.0),
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# PDF Report
+@app.get('/api/export/pdf/{sid}')
+async def export_pdf(sid: str):
+    if sid not in _sess:
+        raise HTTPException(404, 'Session not found')
+    try:
+        from app.reports.pdf_report import generate_pdf_report
+        pdf_bytes = generate_pdf_report(_sess[sid])
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type='application/pdf',
+            headers={'Content-Disposition': 'attachment; filename=windsite_{}.pdf'.format(sid)}
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# OSM Grid Distance
+@app.get('/api/grid_distance')
+async def grid_distance_endpoint(lat: float, lon: float,
+                                  voltage_min: int = 66000,
+                                  radius_km: float = 80.0):
+    try:
+        from app.gis.osm_grid import nearest_grid_distance
+        return await nearest_grid_distance(lat, lon, voltage_min, radius_km)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# Regulatory Compliance
+@app.get('/api/regulatory')
+async def regulatory_endpoint(lat: float, lon: float):
+    try:
+        from app.gis.regulatory import check_regulatory_compliance, check_osm_protected_areas
+        compliance = check_regulatory_compliance(lat, lon)
+        osm_areas  = await check_osm_protected_areas(lat, lon)
+        return {**compliance, 'osm_data': osm_areas}
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# GFS Real-time Wind
+@app.get('/api/wind/gfs')
+async def wind_gfs(lat: float, lon: float):
+    try:
+        from app.services.gfs_realtime import fetch_gfs_current
+        return await fetch_gfs_current(lat, lon)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# ECMWF Real-time Wind
+@app.get('/api/wind/ecmwf')
+async def wind_ecmwf(lat: float, lon: float):
+    try:
+        from app.services.gfs_realtime import fetch_ecmwf_current
+        return await fetch_ecmwf_current(lat, lon)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# GFS + ECMWF Model Comparison
+@app.get('/api/wind/compare')
+async def wind_compare(lat: float, lon: float):
+    try:
+        from app.services.gfs_realtime import fetch_model_comparison
+        return await fetch_model_comparison(lat, lon)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# Real-time Wind Grid (powers animation)
+@app.get('/api/wind/grid')
+async def wind_grid(aoi: str = 'gujarat', model: str = 'gfs', level: int = 80):
+    try:
+        from app.services.gfs_realtime import fetch_wind_grid_realtime
+        return await fetch_wind_grid_realtime(aoi, model, level)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# Enhanced LULC
+@app.get('/api/lulc')
+async def lulc_endpoint(lat: float, lon: float, elev: float = 0.0):
+    try:
+        from app.gis.lulc_enhanced import classify_enhanced
+        return await classify_enhanced(lat, lon, elev)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# All new endpoints summary
+@app.get('/api/endpoints')
+def list_endpoints():
+    return {
+        'new_endpoints': [
+            'GET  /api/wind_rose?lat=&lon=',
+            'POST /api/wake_loss',
+            'POST /api/farm_layout',
+            'GET  /api/export/pdf/{sid}',
+            'GET  /api/grid_distance?lat=&lon=',
+            'GET  /api/regulatory?lat=&lon=',
+            'GET  /api/wind/gfs?lat=&lon=',
+            'GET  /api/wind/ecmwf?lat=&lon=',
+            'GET  /api/wind/compare?lat=&lon=',
+            'GET  /api/wind/grid?aoi=&model=&level=',
+            'GET  /api/lulc?lat=&lon=',
+        ]
+    }
