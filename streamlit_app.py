@@ -3,7 +3,7 @@ import threading
 import uvicorn
 import sys
 import time
-import asyncio
+import socket
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -26,17 +26,16 @@ footer {visibility: hidden;}
 """, unsafe_allow_html=True)
 
 API_PORT = 8000
-HTML_FILE = Path(__file__).parent / "frontend" / "windsite_v4.html"
 
 
 @st.cache_resource
 def start_fastapi():
-    import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    result = sock.connect_ex(('localhost', API_PORT))
+    already_running = sock.connect_ex(('localhost', API_PORT)) == 0
     sock.close()
-    if result == 0:
+    if already_running:
         return True
+
     from app.main import app as fastapi_app
     from fastapi.responses import HTMLResponse
 
@@ -44,16 +43,9 @@ def start_fastapi():
     with open(str(html_path), "r", encoding="utf-8", errors="replace") as f:
         html_content = f.read()
 
-    app_url = st.context.headers.get("host", "localhost")
-    is_cloud = "streamlit.app" in app_url or "streamlit.io" in app_url
-    if is_cloud:
-        api_base = "https://" + app_url.replace("8501", str(API_PORT))
-    else:
-        api_base = "http://localhost:" + str(API_PORT)
-
     html_content = html_content.replace(
         "<script>",
-        '<script>window.WINDSITE_API_BASE="' + api_base + '";',
+        "<script>window.WINDSITE_API_BASE='';",
         1
     )
 
@@ -62,35 +54,29 @@ def start_fastapi():
         return HTMLResponse(content=html_content)
 
     def run():
-        uvicorn.run(fastapi_app, host="0.0.0.0", port=API_PORT, log_level="warning")
+        uvicorn.run(
+            fastapi_app,
+            host="0.0.0.0",
+            port=API_PORT,
+            log_level="warning"
+        )
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
-    time.sleep(3)
+    time.sleep(5)
     return True
 
 
 start_fastapi()
 
-if not HTML_FILE.exists():
-    st.error("HTML not found: " + str(HTML_FILE))
-    st.stop()
-
-with open(str(HTML_FILE), "r", encoding="utf-8", errors="replace") as f:
-    html_content = f.read()
-
-app_url = st.context.headers.get("host", "localhost")
-is_cloud = "streamlit.app" in app_url
-
-if is_cloud:
-    api_base = "https://" + app_url.split(":")[0] + ":8000"
-else:
-    api_base = "http://localhost:" + str(API_PORT)
-
-html_content = html_content.replace(
-    "<script>",
-    '<script>window.WINDSITE_API_BASE="' + api_base + '";',
-    1
+st.components.v1.html(
+    """
+    <style>
+    body { margin: 0; padding: 0; background: #050709; }
+    iframe { border: none; }
+    </style>
+    <iframe src="/dashboard" style="width:100%;height:960px;border:none;"></iframe>
+    """,
+    height=960
 )
 
-st.components.v1.html(html_content, height=960, scrolling=False)
