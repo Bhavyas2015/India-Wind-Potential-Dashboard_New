@@ -329,7 +329,7 @@ canvas.chart{max-height:140px}
     <div class="field-label">Start Year <span class="field-val" id="yr0v">2020</span></div>
     <input type="range" id="yr0" min="2018" max="2023" value="2020" step="1" oninput="updYr()">
     <div class="field-label">End Year <span class="field-val" id="yr1v">2024</span></div>
-    <input type="range" id="yr1" min="2019" max="2025" value="2024" step="1" oninput="updYr()">
+    <input type="range" id="yr1" min="2019" max="2023" value="2023" step="1" oninput="updYr()">
     <div class="field-label">Grid Spacing <span class="field-val" id="gsv">0.5 deg</span></div>
     <input type="range" id="gs" min="1" max="4" value="2" step="1" oninput="updGS()">
   </div>
@@ -562,14 +562,7 @@ canvas.chart{max-height:140px}
 </div>
 
 <script>
-const API = window.location.hostname === 'localhost' ? 'http://localhost:8000' : '';
-const _origFetch = window.fetch;
-window.fetch = function(url, opts) {
-  if (typeof url === 'string' && url.startsWith('http://localhost:8000')) {
-    url = url.replace('http://localhost:8000', '');
-  }
-  return _origFetch(url, opts);
-};
+const API = window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://india-wind-potential-dashboardnew-sttisnarazbfogzwa7mxkn.streamlit.app';
 const GS_MAP = [0.25,0.5,0.75,1.0];
 const LULC_COLORS = {open:'#78c83a',agricultural:'#a3c96e',shrubland:'#c8a93e',
   forest:'#2d6a4f',urban:'#ef4444',water:'#3b82f6',wetland:'#6b7280',
@@ -578,7 +571,7 @@ const LULC_COLORS = {open:'#78c83a',agricultural:'#a3c96e',shrubland:'#c8a93e',
 let S = {
   gridData:[], sessionId:null, layer:'suit', activeChart:'weibull',
   selectedPt:null, windRunning:false, currentView:'map',
-  weightsModified:false, yr0:2020, yr1:2024,
+  weightsModified:false, yr0:2020, yr1:2023,
   gs:0.5, hh:80, alpha:0.143, turbine:'vestas_v90',
   weights:{wind:35,ter:20,land:20,acc:15,fin:10},
 };
