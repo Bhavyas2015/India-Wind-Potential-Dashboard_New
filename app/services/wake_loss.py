@@ -152,7 +152,7 @@ def farm_aep_with_wake(
             f = v - idx
             return curve[idx] * (1 - f) + curve[min(idx + 1, len(curve) - 1)] * f
 
-        gross_cf = float(np.clip(np.trapz([power_at_v(v) for v in v_arr] * pdf, v_arr) / max(cap, 1), 0, 0.65))
+        gross_cf = float(np.clip(np.trapezoid([power_at_v(v) for v in v_arr] * pdf, v_arr) / max(cap, 1), 0, 0.65))
         gross_aep = gross_cf * cap * 8760 / 1000
         turbine_gross.append(gross_aep)
 

@@ -1,4 +1,3 @@
-Set-Content streamlit_app.py @'
 import streamlit as st
 import threading
 import uvicorn
@@ -6,8 +5,8 @@ import sys
 import time
 import socket
 import json
+import asyncio
 from pathlib import Path
-from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -30,6 +29,16 @@ footer {visibility: hidden;}
 
 API_PORT = 8000
 
+def get_api_base():
+    try:
+        headers = st.context.headers
+        host = headers.get("host", "localhost")
+        if "streamlit.app" in host:
+            return "https://" + host
+        return "http://localhost:" + str(API_PORT)
+    except Exception:
+        return "http://localhost:" + str(API_PORT)
+
 @st.cache_resource
 def start_fastapi():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -39,6 +48,13 @@ def start_fastapi():
         return True
     from app.main import app as fastapi_app
     from fastapi.responses import HTMLResponse
+    from fastapi.middleware.cors import CORSMiddleware
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     html_path = Path(__file__).parent / "frontend" / "windsite_v4.html"
     with open(str(html_path), "r", encoding="utf-8", errors="replace") as f:
         html_content = f.read()
@@ -51,44 +67,28 @@ def start_fastapi():
     def dashboard():
         return HTMLResponse(content=html_content)
     def run():
-        uvicorn.run(fastapi_app, host="0.0.0.0", port=API_PORT, log_level="warning")
+        uvicorn.run(
+            fastapi_app,
+            host="0.0.0.0",
+            port=API_PORT,
+            log_level="warning"
+        )
     t = threading.Thread(target=run, daemon=True)
     t.start()
     time.sleep(5)
     return True
 
 start_fastapi()
+api_base = get_api_base()
 
 html_path = Path(__file__).parent / "frontend" / "windsite_v4.html"
 with open(str(html_path), "r", encoding="utf-8", errors="replace") as f:
     html_content = f.read()
 
-# On Streamlit Cloud inject a fetch proxy that routes API calls
-# through the Streamlit server using postMessage bridge
-inject = """
-<script>
-// API proxy for Streamlit Cloud
-const _isCloud = window.location.hostname.includes('streamlit.app') || window.location.hostname.includes('hf.space');
-window.WINDSITE_API_BASE = _isCloud ? '' : 'http://localhost:8000';
-
-if (_isCloud) {
-  const _origFetch = window.fetch.bind(window);
-  window.fetch = async function(url, opts) {
-    if (typeof url === 'string' && url.startsWith('http://localhost:8000')) {
-      url = url.replace('http://localhost:8000', '');
-    }
-    return _origFetch(url, opts);
-  };
-}
-</script>
-"""
-
-html_content = html_content.replace("</head>", inject + "</head>")
 html_content = html_content.replace(
     "<script>",
-    "<script>window.WINDSITE_API_BASE='http://localhost:8000';",
+    "<script>window.WINDSITE_API_BASE='" + api_base + "';",
     1
 )
 
 st.components.v1.html(html_content, height=960, scrolling=False)
-'@

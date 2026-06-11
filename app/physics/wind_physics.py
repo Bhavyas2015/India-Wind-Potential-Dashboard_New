@@ -79,7 +79,7 @@ def cap_factor(k, c, tkey, dv=0.1):
         i = min(int(v), len(cu) - 2)
         f = v - i
         return cu[i] * (1 - f) + cu[min(i + 1, len(cu) - 1)] * f
-    return float(np.clip(np.trapz([pw(v) for v in va] * pa, va) / cap, 0, 0.65))
+    return float(np.clip(np.trapezoid([pw(v) for v in va] * pa, va) / cap, 0, 0.65))
 
 def aep(cf, cap_kw):
     return float(cf * cap_kw * 8760 / 1000)
