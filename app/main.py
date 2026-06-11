@@ -44,8 +44,8 @@ AOI = {
 
 class AnalysisReq(BaseModel):
     aoi:          str   = Field('gujarat')
-    start_year:   int   = Field(2020, ge=2001, le=2025)
-    end_year:     int   = Field(2023, ge=2001, le=2025)
+    start_year:   int   = Field(2020, ge=2001, le=2026)
+    end_year:     int   = Field(2023, ge=2001, le=2026)
     grid_spacing: float = Field(0.5, ge=0.25, le=1.0)
     hub_height:   float = Field(80.0, ge=10.0, le=200.0)
     alpha:        float = Field(0.143, ge=0.05, le=0.5)
